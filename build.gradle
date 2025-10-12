@@ -59,8 +59,7 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 tasks.named('jar', Jar) {
-    archiveBaseName.set('Arffornia_Proxy')
-    archiveClassifier.set('')
+    archiveFileName.set("arffornia_proxy.jar")
 }
 
 def templateSource = file('src/main/templates')

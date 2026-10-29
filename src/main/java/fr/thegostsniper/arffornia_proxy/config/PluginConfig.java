@@ -55,12 +55,12 @@ public class PluginConfig {
                 properties.load(stream);
             }
 
-            this.apiUrl = properties.getProperty("api.base-url", "");
-            this.apiClientId = properties.getProperty("api.client-id", "");
-            this.apiClientSecret = properties.getProperty("api.client-secret", "");
+            this.apiUrl = properties.getProperty("api.base-url", "").trim();
+            this.apiClientId = properties.getProperty("api.client-id", "").trim();
+            this.apiClientSecret = properties.getProperty("api.client-secret", "").trim();
 
-            if (apiUrl.isEmpty() || apiClientId.isEmpty() || apiClientSecret.isEmpty()) {
-                logger.error("Configuration is incomplete. Please fill in api.base-url, api.client-id, and api.client-secret in config.properties.");
+            if (!isSet(apiUrl) || !isSet(apiClientId) || !isSet(apiClientSecret)) {
+                logger.error("Configuration is incomplete. Please fill in api.base-url, api.client-id, and api.client-secret in {}.", configFile);
                 return false;
             }
 
@@ -71,6 +71,13 @@ public class PluginConfig {
             logger.error("Failed to load or create configuration file.", e);
             return false;
         }
+    }
+
+    /**
+     * A value is considered set when it is non-empty and is not an unrendered template placeholder such as {@code ${CFG_X}}.
+     */
+    static boolean isSet(String value) {
+        return value != null && !value.isBlank() && !(value.startsWith("${") && value.endsWith("}"));
     }
 
     public String getApiUrl() {

@@ -18,7 +18,8 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Parsed {@code motd.yml}. See the default file in the plugin resources for the format.
+ * Parsed {@code motd.yml}. The file and its format notes live in Arffornia_Provisioning,
+ * {@code config/proxy/storage/plugins/arffornia_proxy/motd.yml}.
  *
  * @param defaultLanguage language for pings from unknown addresses
  * @param supportedLanguages languages the file provides; others fall back to the default

@@ -48,9 +48,11 @@ public final class MotdPreviewCommand implements SimpleCommand {
                 .orElse(List.of());
         invocation.source().sendMessage(Component.text(
                 "MOTD on " + shownDay + " (" + shownLanguage + "), candidates: " + ids, NamedTextColor.GRAY));
-        motd.render(shownDay, shownLanguage).ifPresentOrElse(
-                invocation.source()::sendMessage,
-                () -> invocation.source().sendMessage(Component.text("No valid motd.yml loaded.", NamedTextColor.RED)));
+        if (!motd.loaded()) {
+            invocation.source().sendMessage(Component.text(
+                    "No valid motd.yml loaded: showing the fallback. Fix it in Arffornia_Provisioning.", NamedTextColor.RED));
+        }
+        invocation.source().sendMessage(motd.render(shownDay, shownLanguage));
     }
 
     @Override

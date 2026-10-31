@@ -1,11 +1,15 @@
 package fr.thegostsniper.arffornia_proxy.motd;
 
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.minimessage.Context;
 import net.kyori.adventure.text.minimessage.MiniMessage;
+import net.kyori.adventure.text.minimessage.tag.Tag;
+import net.kyori.adventure.text.minimessage.tag.resolver.ArgumentQueue;
+import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
 import org.slf4j.Logger;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
@@ -19,13 +23,25 @@ import java.util.random.RandomGenerator;
  * Loads {@code motd.yml} from the plugin data directory, reloads it when the file changes,
  * and renders the two-line server list description.
  *
- * <p>If the file is missing, the default from the jar is copied there first. If the file is
- * invalid, the last valid version is kept and an error is logged; with no valid version at
- * all, {@link #render} returns empty and Velocity's own {@code motd} stays in place.
+ * <p>There is one source of truth for the MOTD: {@code motd.yml} in Arffornia_Provisioning
+ * ({@code config/proxy/storage/plugins/arffornia_proxy/motd.yml}), which the provisioning
+ * init container writes into the plugin data directory. The jar ships no copy of it.
+ *
+ * <p>If the file is missing or has never been valid, {@link #render} returns
+ * {@link #FALLBACK}, the bare server name, and logs where the file should come from. If a
+ * later edit is invalid, the last valid version is kept and an error is logged. Either way
+ * Velocity's own {@code motd} setting is never shown.
+ *
+ * <p>Besides standard MiniMessage, lines may use {@code <age:YYYY>}, which renders the number
+ * of full years from that year to the displayed day (for example {@code <age:2016>} is 10
+ * in 2026).
  */
 public final class MotdService {
 
     public static final String FILE_NAME = "motd.yml";
+
+    /** Shown only when no valid {@code motd.yml} is loaded. Deliberately not content. */
+    public static final Component FALLBACK = Component.text("Arffornia", NamedTextColor.AQUA);
 
     private final Logger logger;
     private final Path file;
@@ -43,20 +59,12 @@ public final class MotdService {
         this.random = random;
     }
 
-    /** Copies the default file if needed and loads it. */
+    /** Loads the file, or warns that it is missing. */
     public void init() {
-        try {
-            if (Files.notExists(file)) {
-                Files.createDirectories(file.getParent());
-                try (InputStream in = getClass().getClassLoader().getResourceAsStream(FILE_NAME)) {
-                    if (in != null) {
-                        Files.copy(in, file);
-                        logger.info("Created the default {}", file);
-                    }
-                }
-            }
-        } catch (IOException e) {
-            logger.error("Could not create the default {}: {}", file, e.getMessage());
+        if (Files.notExists(file)) {
+            logger.warn("No {} at {}. The MOTD is provisioned from Arffornia_Provisioning "
+                    + "(config/proxy/storage/plugins/arffornia_proxy/motd.yml); showing the bare server name until it exists.",
+                    FILE_NAME, file);
         }
         reloadIfChanged();
     }
@@ -105,11 +113,19 @@ public final class MotdService {
         return current != null && current.supportedLanguages().contains(lang) ? lang : fallback;
     }
 
-    /** Renders the description for {@code day} in {@code language}, or empty without a valid file. */
-    public Optional<Component> render(LocalDate day, String language) {
+    /** Whether a valid {@code motd.yml} is loaded. */
+    public boolean loaded() {
+        return config != null;
+    }
+
+    /**
+     * Renders the description for {@code day} in {@code language}. Without a valid file, or
+     * when the chosen entry is not valid MiniMessage, returns {@link #FALLBACK}.
+     */
+    public Component render(LocalDate day, String language) {
         MotdConfig current = config;
         if (current == null) {
-            return Optional.empty();
+            return FALLBACK;
         }
         Optional<MotdEntry> entry = MotdSelector.pick(current.entries(), day, random);
         String header = entry.map(MotdEntry::header).orElse(null);
@@ -119,11 +135,25 @@ public final class MotdService {
         String line = entry.map(e -> e.lineFor(language, current.defaultLanguage())).orElse("");
         String text = line.isEmpty() ? header : header + "<reset>\n" + line;
         try {
-            return Optional.of(miniMessage.deserialize(text));
+            return miniMessage.deserialize(text, ageTag(day));
         } catch (RuntimeException e) {
             logger.error("MOTD entry '{}' is not valid MiniMessage: {}",
                     entry.map(MotdEntry::id).orElse("header"), e.getMessage());
-            return Optional.empty();
+            return FALLBACK;
         }
+    }
+
+    /** {@code <age:YYYY>}: full years from {@code YYYY} to {@code day}. */
+    static TagResolver ageTag(LocalDate day) {
+        return TagResolver.resolver("age", (ArgumentQueue args, Context ctx) -> {
+            String raw = args.popOr("<age> needs a year, for example <age:2016>").value();
+            int since;
+            try {
+                since = Integer.parseInt(raw.trim());
+            } catch (NumberFormatException e) {
+                throw ctx.newException("<age:" + raw + "> is not a year", args);
+            }
+            return Tag.selfClosingInserting(Component.text(Math.max(0, day.getYear() - since)));
+        });
     }
 }

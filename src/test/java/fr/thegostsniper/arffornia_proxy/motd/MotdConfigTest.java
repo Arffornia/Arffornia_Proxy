@@ -1,12 +1,8 @@
 package fr.thegostsniper.arffornia_proxy.motd;
 
-import net.kyori.adventure.text.minimessage.MiniMessage;
-import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Random;
@@ -19,57 +15,52 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MotdConfigTest {
 
-    private static String bundledYaml() throws IOException {
-        try (InputStream in = MotdConfigTest.class.getClassLoader().getResourceAsStream(MotdService.FILE_NAME)) {
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-        }
-    }
+    /**
+     * A small sample in the production format. The real content, and the tests that check
+     * it (both languages, line length), live in Arffornia_Provisioning next to motd.yml.
+     */
+    private static final String SAMPLE = """
+            settings:
+              default-language: en
+              languages: [en, fr]
+              timezone: Europe/Paris
+              header: "<bold>Arffornia</bold>"
+            entries:
+              - id: creeper-feelings
+                en: "<green>Creepers have feelings."
+                fr: "<green>Les creepers ont du cœur."
+              - id: new-year
+                dates: "12-31..01-02"
+                en: "Happy New Year"
+                fr: "Bonne année"
+              - id: halloween-mining
+                dates: "10-24..10-31"
+                en: "Something is mining"
+                fr: "Quelque chose creuse"
+              - id: halloween-wither
+                dates: "10-24..10-31"
+                en: "Trick or treat"
+                fr: "Un bonbon ou un sort"
+            """;
 
     private static List<String> ids(List<MotdEntry> entries) {
         return entries.stream().map(MotdEntry::id).collect(Collectors.toList());
     }
 
     @Test
-    void bundledFileParsesAndEveryEntryHasEnglishAndFrench() throws IOException {
-        MotdConfig config = MotdConfig.parse(bundledYaml());
+    void sampleParses() throws IOException {
+        MotdConfig config = MotdConfig.parse(SAMPLE);
         assertEquals("en", config.defaultLanguage());
         assertEquals(List.of("en", "fr"), config.supportedLanguages());
-        assertFalse(config.entries().isEmpty());
-        for (MotdEntry entry : config.entries()) {
-            assertTrue(entry.lines().containsKey("en"), entry.id() + " has no en");
-            assertTrue(entry.lines().containsKey("fr"), entry.id() + " has no fr");
-        }
-    }
-
-    /** The server list is about 270 px wide: longer lines are cut off on screen. */
-    @Test
-    void everyBundledLineFitsTheServerList() throws IOException {
-        MotdConfig config = MotdConfig.parse(bundledYaml());
-        MiniMessage mm = MiniMessage.miniMessage();
-        PlainTextComponentSerializer plain = PlainTextComponentSerializer.plainText();
-        List<String> headers = new java.util.ArrayList<>(List.of(config.header()));
-        for (MotdEntry entry : config.entries()) {
-            if (entry.header() != null) {
-                headers.add(entry.header());
-            }
-            for (String line : entry.lines().values()) {
-                String text = plain.serialize(mm.deserialize(line));
-                assertTrue(text.length() <= 48, entry.id() + " is too long (" + text.length() + "): " + text);
-            }
-        }
-        for (String header : headers) {
-            String text = plain.serialize(mm.deserialize(header));
-            assertTrue(text.length() <= 48, "header too long (" + text.length() + "): " + text);
-        }
+        assertEquals(4, config.entries().size());
     }
 
     @Test
     void seasonalEntriesReplaceQuotes() throws IOException {
-        List<MotdEntry> entries = MotdConfig.parse(bundledYaml()).entries();
+        List<MotdEntry> entries = MotdConfig.parse(SAMPLE).entries();
         assertEquals(List.of("halloween-mining", "halloween-wither"),
                 ids(MotdSelector.candidates(entries, LocalDate.of(2026, 10, 31))));
         assertEquals(List.of("new-year"), ids(MotdSelector.candidates(entries, LocalDate.of(2027, 1, 1))));
-        assertEquals(List.of("april-fools"), ids(MotdSelector.candidates(entries, LocalDate.of(2027, 4, 1))));
         List<String> ordinary = ids(MotdSelector.candidates(entries, LocalDate.of(2027, 3, 3)));
         assertTrue(ordinary.contains("creeper-feelings"));
         assertFalse(ordinary.contains("halloween-mining"));

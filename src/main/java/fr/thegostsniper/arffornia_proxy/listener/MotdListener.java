@@ -32,10 +32,8 @@ public class MotdListener {
         String language = remember
                 ? languages.recall(address).orElseGet(() -> motd.languageFor(null))
                 : motd.languageFor(null);
-        motd.render(motd.today(), language).ifPresent(description -> {
-            ServerPing ping = event.getPing().asBuilder().description(description).build();
-            event.setPing(ping);
-        });
+        ServerPing ping = event.getPing().asBuilder().description(motd.render(motd.today(), language)).build();
+        event.setPing(ping);
     }
 
     @Subscribe

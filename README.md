@@ -49,4 +49,6 @@ Push a tag `vX.Y.Z` on `main`. The `Build and Release` workflow builds with `-Pp
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md). Security issues: [SECURITY.md](SECURITY.md).
 
 ## License
-No license file yet (all rights reserved by default); a decision is pending in #7.
+[MIT](LICENSE), © Brian Perret and Arffornia contributors.
+
+NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.

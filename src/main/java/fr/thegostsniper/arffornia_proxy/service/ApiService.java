@@ -13,6 +13,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -22,108 +23,154 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public class ApiService {
 
+    static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
+    static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
+
+    /** Outcome of a vote submission, mainly for logging and tests. */
+    public enum VoteResult { SENT, AUTH_FAILED, REJECTED, ERROR }
+
     private final Logger logger;
-    private final PluginConfig config;
+    private final String apiUrl;
+    private final String clientId;
+    private final String clientSecret;
     private final HttpClient httpClient;
-    private final Gson gson;
+    private final Gson gson = new Gson();
     private final AtomicReference<String> authToken = new AtomicReference<>(null);
+    /** The authentication currently in flight, shared by concurrent callers. */
+    private final AtomicReference<CompletableFuture<String>> pendingAuth = new AtomicReference<>(null);
 
     @Inject
     public ApiService(Logger logger, ProxyServer proxyServer, PluginConfig config) {
+        this(logger, config.getApiUrl(), config.getApiClientId(), config.getApiClientSecret());
+    }
+
+    ApiService(Logger logger, String apiUrl, String clientId, String clientSecret) {
         this.logger = logger;
-        this.config = config;
-        this.httpClient = HttpClient.newHttpClient();
-        this.gson = new Gson();
+        this.apiUrl = apiUrl;
+        this.clientId = clientId;
+        this.clientSecret = clientSecret;
+        this.httpClient = HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build();
+    }
+
+    /**
+     * Returns the cached token, or authenticates. Concurrent callers share one authentication request.
+     *
+     * @return the token, or {@code null} when authentication failed.
+     */
+    private CompletableFuture<String> getToken() {
+        String token = authToken.get();
+        if (token != null) {
+            return CompletableFuture.completedFuture(token);
+        }
+
+        CompletableFuture<String> mine = new CompletableFuture<>();
+        if (!pendingAuth.compareAndSet(null, mine)) {
+            CompletableFuture<String> existing = pendingAuth.get();
+            return existing != null ? existing : getToken();
+        }
+
+        authenticate().whenComplete((result, error) -> {
+            pendingAuth.compareAndSet(mine, null);
+            mine.complete(error == null ? result : null);
+        });
+        return mine;
     }
 
     /**
      * Authenticates with the API using service credentials and stores the token.
-     *
-     * @return A CompletableFuture that completes when authentication is done.
      */
-    private CompletableFuture<Void> authenticate() {
+    private CompletableFuture<String> authenticate() {
         JsonObject payload = new JsonObject();
-        payload.addProperty("client_id", config.getApiClientId());
-        payload.addProperty("client_secret", config.getApiClientSecret());
+        payload.addProperty("client_id", clientId);
+        payload.addProperty("client_secret", clientSecret);
 
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(config.getApiUrl() + "/auth/token/svc"))
+                .uri(URI.create(apiUrl + "/auth/token/svc"))
+                .timeout(REQUEST_TIMEOUT)
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(payload)))
                 .build();
 
         return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-                .thenAccept(response -> {
+                .thenApply(response -> {
                     if (response.statusCode() == 200) {
                         JsonObject jsonResponse = gson.fromJson(response.body(), JsonObject.class);
-                        String token = jsonResponse.get("token").getAsString();
+                        String token = jsonResponse != null && jsonResponse.has("token") ? jsonResponse.get("token").getAsString() : null;
+                        if (token == null) {
+                            logger.error("API authentication response did not contain a token.");
+                            return null;
+                        }
                         this.authToken.set(token);
                         logger.info("Successfully authenticated with the API.");
-                    } else {
-                        logger.error("Failed to authenticate with API. Status: {}, Body: {}", response.statusCode(), response.body());
-                        this.authToken.set(null);
+                        return token;
                     }
+                    logger.error("Failed to authenticate with API. Status: {}", response.statusCode());
+                    return (String) null;
                 }).exceptionally(e -> {
-                    logger.error("Error during API authentication.", e);
-                    this.authToken.set(null);
+                    logger.error("Error during API authentication: {}", e.getMessage());
                     return null;
                 });
     }
 
     /**
-     * Sends a vote to the web API. It will attempt to authenticate if no token is present.
+     * Sends a vote to the web API. Authenticates first if needed. A 401 response clears the token and triggers
+     * exactly one re-authentication and one retry.
      *
      * @param vote The vote event from NuVotifier.
      */
-    public void sendVote(Vote vote) {
-        if (authToken.get() == null) {
-            logger.info("No auth token, attempting to authenticate first...");
-            authenticate().thenRun(() -> {
-                if (authToken.get() != null) {
-                    executeSendVote(vote);
-                } else {
-                    logger.error("Cannot send vote, authentication failed.");
-                }
-            });
-        } else {
-            executeSendVote(vote);
-        }
+    public CompletableFuture<VoteResult> sendVote(Vote vote) {
+        return sendVote(vote.getUsername(), vote.getServiceName(), vote.getAddress());
     }
 
-    /**
-     * Executes the actual HTTP request to send the vote data.
-     *
-     * @param vote The vote event from NuVotifier.
-     */
-    private void executeSendVote(Vote vote) {
-        JsonObject payload = new JsonObject();
-        payload.addProperty("username", vote.getUsername());
-        payload.addProperty("service_name", vote.getServiceName());
-        payload.addProperty("ip_address", vote.getAddress());
-
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(config.getApiUrl() + "/vote/nuvotifier"))
-                .header("Authorization", "Bearer " + authToken.get())
-                .header("Content-Type", "application/json")
-                .header("Accept", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(payload)))
-                .build();
-
-        httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-                .thenAccept(response -> {
-                    if (response.statusCode() == 401) {
-                        logger.warn("API token is invalid or expired. Re-authenticating...");
-                        authToken.set(null);
-                        sendVote(vote); // Retry sending the vote after re-authentication
-                    } else if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                        logger.info("Successfully sent vote for player {} from {}.", vote.getUsername(), vote.getServiceName());
-                    } else {
-                        logger.error("Failed to send vote for {}. Status: {}, Body: {}", vote.getUsername(), response.statusCode(), response.body());
-                    }
-                }).exceptionally(e -> {
-                    logger.error("An error occurred while sending vote for {}.", vote.getUsername(), e);
-                    return null;
+    CompletableFuture<VoteResult> sendVote(String username, String serviceName, String address) {
+        return attemptSend(username, serviceName, address, true)
+                .exceptionally(e -> {
+                    logger.error("An error occurred while sending vote for {}: {}", username, e.getMessage());
+                    return VoteResult.ERROR;
                 });
+    }
+
+    private CompletableFuture<VoteResult> attemptSend(String username, String serviceName, String address, boolean retryOnUnauthorized) {
+        return getToken().thenCompose(token -> {
+            if (token == null) {
+                logger.error("Cannot send vote for {}, authentication failed.", username);
+                return CompletableFuture.completedFuture(VoteResult.AUTH_FAILED);
+            }
+
+            JsonObject payload = new JsonObject();
+            payload.addProperty("username", username);
+            payload.addProperty("service_name", serviceName);
+            payload.addProperty("ip_address", address);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(apiUrl + "/vote/nuvotifier"))
+                    .timeout(REQUEST_TIMEOUT)
+                    .header("Authorization", "Bearer " + token)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(payload)))
+                    .build();
+
+            return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                    .thenCompose(response -> {
+                        int status = response.statusCode();
+                        if (status == 401) {
+                            authToken.compareAndSet(token, null);
+                            if (retryOnUnauthorized) {
+                                logger.warn("API token is invalid or expired. Re-authenticating once...");
+                                return attemptSend(username, serviceName, address, false);
+                            }
+                            logger.error("Vote for {} rejected with 401 after re-authentication; giving up.", username);
+                            return CompletableFuture.completedFuture(VoteResult.AUTH_FAILED);
+                        }
+                        if (status >= 200 && status < 300) {
+                            logger.info("Successfully sent vote for player {} from {}.", username, serviceName);
+                            return CompletableFuture.completedFuture(VoteResult.SENT);
+                        }
+                        logger.error("Failed to send vote for {}. Status: {}, Body: {}", username, status, response.body());
+                        return CompletableFuture.completedFuture(VoteResult.REJECTED);
+                    });
+        });
     }
 }

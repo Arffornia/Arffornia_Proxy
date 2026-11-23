@@ -8,7 +8,7 @@ The website turns each vote into points and a pending in-game reward.
 Architecture docs (coming soon): https://arffornia.github.io/docs/
 
 ## Requirements
-- JDK 21 to run Gradle (the plugin is compiled for Java 17; the toolchain is provisioned automatically).
+- JDK 21 to run Gradle (the plugin is compiled for Java 21; the toolchain is provisioned automatically).
 - Velocity 3.4 with the [NuVotifier](https://github.com/NuVotifier/NuVotifier) plugin installed.
 
 ## Quickstart

@@ -41,8 +41,8 @@ using a service-account Sanctum token (`POST /auth/token/svc`). Nothing else (no
 - Manual smoke test: `make run`, install NuVotifier in `run/plugins`, send a test vote.
 
 ## Gotchas (from the audit)
-- Builds against `velocity-api:3.4.0-SNAPSHOT` (not reproducible) — see #5.
-- NuVotifier comes from jitpack and must be declared as a plugin dependency — see #4.
+- Builds against the released `velocity-api:3.4.0`, the version the proxy runs (`runVelocity` uses the same).
+- NuVotifier is only published on jitpack (not on Maven Central or PaperMC), so the jitpack repository stays; it must be declared as a plugin dependency — see #4.
 - Votes are dropped when the API is down (no queue) — see #8.
 - The website token never expires; each re-auth mints a new token, so keep re-auth bounded and shared.
 

@@ -15,17 +15,17 @@ repositories {
         name = "papermc-repo"
         url = "https://repo.papermc.io/repository/maven-public/"
     }
-    maven { url 'https://jitpack.io' }
+    maven { url = 'https://jitpack.io' }
 }
 
 dependencies {
-    compileOnly("com.velocitypowered:velocity-api:3.6.0-SNAPSHOT")
-    annotationProcessor("com.velocitypowered:velocity-api:3.6.0-SNAPSHOT")
+    compileOnly("com.velocitypowered:velocity-api:3.4.0")
+    annotationProcessor("com.velocitypowered:velocity-api:3.4.0")
     compileOnly('com.github.parallelblock:NuVotifier:2.7.3')
 
     compileOnly('com.google.code.gson:gson:2.15.0')
 
-    testImplementation("com.velocitypowered:velocity-api:3.6.0-SNAPSHOT")
+    testImplementation("com.velocitypowered:velocity-api:3.4.0")
     testImplementation('com.github.parallelblock:NuVotifier:2.7.3')
     testImplementation('com.google.code.gson:gson:2.15.0')
     testImplementation(platform('org.junit:junit-bom:6.1.3'))
@@ -55,7 +55,7 @@ githubRelease {
 
 tasks {
     runVelocity {
-        velocityVersion("3.4.0-SNAPSHOT")
+        velocityVersion("3.4.0")
     }
 }
 

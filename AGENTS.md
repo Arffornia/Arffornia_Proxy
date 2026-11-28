@@ -11,7 +11,8 @@ using a service-account Sanctum token (`POST /auth/token/svc`). Nothing else (no
 |---|---|
 | `src/main/java/.../Arffornia_Proxy.java` | `@Plugin` entry point; loads config, wires the listener |
 | `src/main/java/.../config/PluginConfig.java` | Reads `plugins/arffornia_proxy/config.properties` (copied from the jar default on first run) |
-| `src/main/java/.../listener/VoteListener.java` | `@Subscribe VotifierEvent` → `ApiService.sendVote` |
+| `src/main/java/.../listener/VoteListener.java` | `@Subscribe VotifierEvent` → `VoteDispatcher.submit` |
+| `src/main/java/.../vote/` | `VoteQueue` (disk-backed bounded FIFO), `VoteDispatcher` (ordered delivery, exponential backoff) |
 | `src/main/java/.../service/ApiService.java` | `java.net.http` client, token cache, vote POST |
 | `src/main/resources/config.properties` | Default config shipped in the jar (must contain placeholders only, see #2) |
 | `src/main/templates/` | `BuildConstants.VERSION`, expanded at build time |
@@ -43,7 +44,7 @@ using a service-account Sanctum token (`POST /auth/token/svc`). Nothing else (no
 ## Gotchas (from the audit)
 - Builds against the released `velocity-api:3.4.0`, the version the proxy runs (`runVelocity` uses the same).
 - NuVotifier is only published on jitpack (not on Maven Central or PaperMC), so the jitpack repository stays; it must be declared as a plugin dependency — see #4.
-- Votes are dropped when the API is down (no queue) — see #8.
+- Votes go through a persistent queue (`plugins/arffornia_proxy/pending-votes.json`, max 1000, oldest dropped, backoff 5 s to 5 min). Each vote carries a UUID sent as `Idempotency-Key` header and `idempotency_key` body field; the website does not deduplicate on it yet (Arffornia_Website#194), so an ambiguous failure (timeout after the site recorded the vote) can still double a reward.
 - The website token never expires; each re-auth mints a new token, so keep re-auth bounded and shared.
 
 ## Related repos

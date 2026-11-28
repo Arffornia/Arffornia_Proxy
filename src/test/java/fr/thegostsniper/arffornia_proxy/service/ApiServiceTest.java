@@ -16,8 +16,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ApiServiceTest {
 
@@ -28,6 +30,8 @@ class ApiServiceTest {
     private volatile int voteStatus = 200;
     private volatile int authStatus = 200;
     private volatile long authDelayMs = 0;
+    private final AtomicReference<String> lastIdempotencyHeader = new AtomicReference<>();
+    private final AtomicReference<String> lastVoteBody = new AtomicReference<>();
 
     @BeforeEach
     void start() throws IOException {
@@ -40,6 +44,8 @@ class ApiServiceTest {
         });
         server.createContext("/api/vote/nuvotifier", exchange -> {
             voteCalls.incrementAndGet();
+            lastIdempotencyHeader.set(exchange.getRequestHeaders().getFirst("Idempotency-Key"));
+            lastVoteBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             respond(exchange, voteStatus, "{}");
         });
         server.start();
@@ -78,10 +84,32 @@ class ApiServiceTest {
     }
 
     @Test
-    void serverErrorIsNotRetried() throws Exception {
+    void serverErrorIsReportedAsUnavailableWithoutInlineRetry() throws Exception {
         voteStatus = 500;
-        assertEquals(ApiService.VoteResult.REJECTED, vote(service()));
+        assertEquals(ApiService.VoteResult.UNAVAILABLE, vote(service()));
         assertEquals(1, voteCalls.get());
+    }
+
+    @Test
+    void clientErrorIsRejectedForGood() throws Exception {
+        voteStatus = 422;
+        assertEquals(ApiService.VoteResult.REJECTED, vote(service()));
+    }
+
+    @Test
+    void unreachableApiIsReportedAsError() throws Exception {
+        ApiService service = service();
+        assertEquals(ApiService.VoteResult.SENT, vote(service));
+        server.stop(0);
+        assertEquals(ApiService.VoteResult.ERROR, vote(service));
+    }
+
+    @Test
+    void voteCarriesItsIdempotencyKeyInHeaderAndBody() throws Exception {
+        assertEquals(ApiService.VoteResult.SENT,
+                service().sendVote("key-123", "player", "service", "127.0.0.1").get(15, TimeUnit.SECONDS));
+        assertEquals("key-123", lastIdempotencyHeader.get());
+        assertTrue(lastVoteBody.get().contains("\"idempotency_key\":\"key-123\""));
     }
 
     @Test

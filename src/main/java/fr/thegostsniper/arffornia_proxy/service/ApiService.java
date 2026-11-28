@@ -14,6 +14,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -26,8 +27,17 @@ public class ApiService {
     static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
     static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
 
-    /** Outcome of a vote submission, mainly for logging and tests. */
-    public enum VoteResult { SENT, AUTH_FAILED, REJECTED, ERROR }
+    /**
+     * Outcome of a vote submission. {@code SENT} and {@code REJECTED} (the API refused the vote, resending cannot
+     * help) are final; the other values are transient and the vote should be sent again later.
+     */
+    public enum VoteResult {
+        SENT, AUTH_FAILED, REJECTED, UNAVAILABLE, ERROR;
+
+        public boolean isFinal() {
+            return this == SENT || this == REJECTED;
+        }
+    }
 
     private final Logger logger;
     private final String apiUrl;
@@ -120,18 +130,26 @@ public class ApiService {
      * @param vote The vote event from NuVotifier.
      */
     public CompletableFuture<VoteResult> sendVote(Vote vote) {
-        return sendVote(vote.getUsername(), vote.getServiceName(), vote.getAddress());
+        return sendVote(UUID.randomUUID().toString(), vote.getUsername(), vote.getServiceName(), vote.getAddress());
     }
 
     CompletableFuture<VoteResult> sendVote(String username, String serviceName, String address) {
-        return attemptSend(username, serviceName, address, true)
+        return sendVote(UUID.randomUUID().toString(), username, serviceName, address);
+    }
+
+    /**
+     * @param idempotencyKey identifies this vote across resends; sent as the {@code Idempotency-Key} header and
+     *                       the {@code idempotency_key} body field so the website can ignore duplicates.
+     */
+    public CompletableFuture<VoteResult> sendVote(String idempotencyKey, String username, String serviceName, String address) {
+        return attemptSend(idempotencyKey, username, serviceName, address, true)
                 .exceptionally(e -> {
                     logger.error("An error occurred while sending vote for {}: {}", username, e.getMessage());
                     return VoteResult.ERROR;
                 });
     }
 
-    private CompletableFuture<VoteResult> attemptSend(String username, String serviceName, String address, boolean retryOnUnauthorized) {
+    private CompletableFuture<VoteResult> attemptSend(String idempotencyKey, String username, String serviceName, String address, boolean retryOnUnauthorized) {
         return getToken().thenCompose(token -> {
             if (token == null) {
                 logger.error("Cannot send vote for {}, authentication failed.", username);
@@ -142,11 +160,13 @@ public class ApiService {
             payload.addProperty("username", username);
             payload.addProperty("service_name", serviceName);
             payload.addProperty("ip_address", address);
+            payload.addProperty("idempotency_key", idempotencyKey);
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(apiUrl + "/vote/nuvotifier"))
                     .timeout(REQUEST_TIMEOUT)
                     .header("Authorization", "Bearer " + token)
+                    .header("Idempotency-Key", idempotencyKey)
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(payload)))
@@ -159,7 +179,7 @@ public class ApiService {
                             authToken.compareAndSet(token, null);
                             if (retryOnUnauthorized) {
                                 logger.warn("API token is invalid or expired. Re-authenticating once...");
-                                return attemptSend(username, serviceName, address, false);
+                                return attemptSend(idempotencyKey, username, serviceName, address, false);
                             }
                             logger.error("Vote for {} rejected with 401 after re-authentication; giving up.", username);
                             return CompletableFuture.completedFuture(VoteResult.AUTH_FAILED);
@@ -169,7 +189,8 @@ public class ApiService {
                             return CompletableFuture.completedFuture(VoteResult.SENT);
                         }
                         logger.error("Failed to send vote for {}. Status: {}, Body: {}", username, status, response.body());
-                        return CompletableFuture.completedFuture(VoteResult.REJECTED);
+                        boolean transientFailure = status >= 500 || status == 408 || status == 429;
+                        return CompletableFuture.completedFuture(transientFailure ? VoteResult.UNAVAILABLE : VoteResult.REJECTED);
                     });
         });
     }
